@@ -25,6 +25,7 @@ services:
       ConnectionStrings__ScrapBook: "Host=postgres;Port=5432;Database=scrapbook;Username=scrapbook_app;Password=${SCRAPBOOK_DB_APP_PASSWORD:?Defina SCRAPBOOK_DB_APP_PASSWORD};Timeout=2;Command Timeout=2"
       DataProtection__KeyPath: /app/keys
       DevelopmentIdentity__Enabled: ${SCRAPBOOK_DEV_IDENTITY_ENABLED:-false}
+      DevelopmentIdentity__AllowContainerBinding: ${SCRAPBOOK_DEV_ALLOW_CONTAINER_BINDING:-false}
       DevelopmentIdentity__AccountId: ${SCRAPBOOK_DEV_ACCOUNT_ID:-}
       DevelopmentIdentity__Token: ${SCRAPBOOK_DEV_IDENTITY_TOKEN:-}
     ports:
@@ -51,6 +52,9 @@ services:
       retries: 10
 
   ui:
+    depends_on:
+      service:
+        condition: service_healthy
     build:
       context: ../scrapbook-ui
       args:
