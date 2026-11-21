@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -38,10 +39,14 @@ class ReleaseReservationTests(unittest.TestCase):
     def git(directory, *args):
         return subprocess.check_output(["git", "-C", str(directory), *args], text=True).strip()
 
-    def reserve(self, directory, run, series="1.0", sha=None):
+    def reserve(self, directory, run, series="1.0", sha=None, output=None):
+        environment = os.environ.copy()
+        environment.pop("GITHUB_OUTPUT", None)
+        if output is not None:
+            environment["GITHUB_OUTPUT"] = str(output)
         return subprocess.run(
             [sys.executable, "-B", str(SCRIPT), series, sha or self.git(directory, "rev-parse", "HEAD"), run],
-            cwd=directory, text=True, capture_output=True, timeout=30,
+            cwd=directory, env=environment, text=True, capture_output=True, timeout=30,
         )
 
     def assert_reservation(self, result):
@@ -71,6 +76,12 @@ class ReleaseReservationTests(unittest.TestCase):
         result = self.reserve(self.first, "100.1")
         self.assertEqual(1, result.returncode)
         self.assertIn("tag anotada", result.stderr)
+
+    def test_job_output_binds_version_to_the_attempt(self):
+        output = self.root / "github-output"
+        result = self.reserve(self.first, "100.2", output=output)
+        self.assertEqual("v1.0.0", self.assert_reservation(result))
+        self.assertEqual("version=v1.0.0\nrun_key=100.2\n", output.read_text(encoding="utf-8"))
 
     def test_invalid_series_revision_or_run_is_rejected(self):
         for options in ({"series": "1.0.0"}, {"sha": "0" * 40}):
