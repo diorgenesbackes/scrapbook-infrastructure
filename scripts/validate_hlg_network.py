@@ -128,12 +128,18 @@ def validate_database(database, args):
     group_ids = {group["VpcSecurityGroupId"] for group in database["VpcSecurityGroups"]}
     if group_ids != {args.database_group_id}:
         errors.append("A instância RDS deve usar somente o security group de banco informado.")
+    if args.environment == "production":
+        if database.get("MultiAZ") is not True:
+            errors.append("O RDS de produção deve estar em Multi-AZ.")
+        if database.get("BackupRetentionPeriod") != 35 or not database.get("LatestRestorableTime"):
+            errors.append("O RDS de produção deve ter retenção de 35 dias e um ponto de restauração disponível.")
     return errors
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Valida o inventário de rede e RDS de homologação.")
+    parser = argparse.ArgumentParser(description="Valida o inventário de rede e RDS do ambiente indicado.")
     parser.add_argument("inventory", type=Path, help="Diretório com as respostas JSON da AWS CLI.")
+    parser.add_argument("--environment", choices=("hlg", "production"), default="hlg")
     parser.add_argument("--vpc-id", required=True)
     parser.add_argument("--db-identifier", required=True)
     parser.add_argument("--public-subnet-ids", nargs="+", required=True)
@@ -169,7 +175,7 @@ def main():
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print("Inventário de rede e RDS de homologação validado.")
+    print(f"Inventário de rede e RDS validado para {args.environment}.")
     return 0
 
 
