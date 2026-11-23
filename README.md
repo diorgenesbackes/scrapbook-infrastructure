@@ -27,3 +27,9 @@ Para uso com contas sintéticas, configure `SCRAPBOOK_DEV_IDENTITY_ENABLED=true`
 A suíte de criação de eventos prepara duas contas sintéticas em um PostgreSQL descartável. Ela usa duas instâncias locais da API com credenciais de Development distintas e executa a interface em loopback. Execute `python3 -B event_stack.py --browser` no repositório [scrapbook-tests](../scrapbook-tests/README.md).
 
 Para a validação automatizada com recursos descartáveis, use o [runner da fundação](../scrapbook-tests/README.md). [Spec local](../scrapbook-docs/F01-base-da-aplicacao-e-ambientes/spec.md)
+
+## Origem do link dos convidados
+
+No GitHub, `UI_ORIGIN` é a origem HTTPS da interface de cada ambiente e `API_ORIGIN` a origem HTTPS da API. O build do Amplify converte `UI_ORIGIN` em `VITE_PUBLIC_SITE_ORIGIN`, e a publicação confere a origem incorporada ao artefato. O endereço é somente a origem, sem caminho, query ou barra final. Na stack local, o link usa a origem loopback acessada, incluindo a porta.
+
+Antes da tiragem do piloto, confira o domínio definitivo e a leitura de uma amostra impressa em Android e iPhone. [Escopo e critérios](../scrapbook-docs/F05-pagina-publica-qr-code-e-prazos/spec.md)
