@@ -28,6 +28,10 @@ services:
       DevelopmentIdentity__AllowContainerBinding: ${SCRAPBOOK_DEV_ALLOW_CONTAINER_BINDING:-false}
       DevelopmentIdentity__AccountId: ${SCRAPBOOK_DEV_ACCOUNT_ID:-}
       DevelopmentIdentity__Token: ${SCRAPBOOK_DEV_IDENTITY_TOKEN:-}
+      InvitationProtection__HashKeyId: ${SCRAPBOOK_INVITATION_HASH_KEY_ID:-}
+      InvitationProtection__HashKey: ${SCRAPBOOK_INVITATION_HASH_KEY:-}
+      InvitationProtection__EncryptionKeyId: ${SCRAPBOOK_INVITATION_ENCRYPTION_KEY_ID:-}
+      InvitationProtection__EncryptionKey: ${SCRAPBOOK_INVITATION_ENCRYPTION_KEY:-}
     ports:
       - "127.0.0.1:${SCRAPBOOK_API_PORT:-5080}:8080"
     volumes:
