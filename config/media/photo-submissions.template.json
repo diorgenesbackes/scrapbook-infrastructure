@@ -28,6 +28,58 @@
     "PhotoIngestionEnabled": {"Fn::Equals": [{"Ref": "EnablePhotoIngestion"}, "true"]}
   },
   "Resources": {
+    "MediaEncryptionKey": {
+      "Type": "AWS::KMS::Key",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "Criptografia das fotos do ambiente Scrap Book",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DelegateKeyAdministration",
+              "Effect": "Allow",
+              "Principal": {"AWS": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}},
+              "Action": [
+                "kms:DescribeKey",
+                "kms:GetKeyPolicy",
+                "kms:PutKeyPolicy",
+                "kms:EnableKey",
+                "kms:DisableKey",
+                "kms:EnableKeyRotation",
+                "kms:DisableKeyRotation",
+                "kms:GetKeyRotationStatus",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ListResourceTags",
+                "kms:UpdateKeyDescription"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DelegateMediaEncryptionThroughS3",
+              "Effect": "Allow",
+              "Principal": {"AWS": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}},
+              "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+              "Resource": "*",
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/temporary/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/original/*"}
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
     "ReceiptDeadLetterQueue": {
       "Type": "AWS::SQS::Queue",
       "DeletionPolicy": "Retain",
@@ -120,7 +172,13 @@
         "VersioningConfiguration": {"Status": "Enabled"},
         "BucketEncryption": {
           "ServerSideEncryptionConfiguration": [
-            {"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "aws:kms",
+                "KMSMasterKeyID": {"Fn::GetAtt": ["MediaEncryptionKey", "Arn"]}
+              },
+              "BucketKeyEnabled": false
+            }
           ]
         },
         "OwnershipControls": {"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]},
@@ -222,6 +280,21 @@
                   "s3:x-amz-copy-source": [
                     {"Fn::Sub": "${MediaBucket}/submissions/temporary/*"},
                     {"Fn::Sub": "/${MediaBucket}/submissions/temporary/*"}
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "UseMediaEncryptionThroughS3",
+              "Effect": "Allow",
+              "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+              "Resource": {"Fn::GetAtt": ["MediaEncryptionKey", "Arn"]},
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "${MediaBucket.Arn}/submissions/temporary/*"},
+                    {"Fn::Sub": "${MediaBucket.Arn}/submissions/original/*"}
                   ]
                 }
               }
