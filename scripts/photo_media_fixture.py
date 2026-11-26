@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import secrets
 import subprocess
@@ -77,15 +78,21 @@ def configure(endpoint, bucket, ui_origin, manual_events):
     return urlsplit(queue_url).path
 
 
-def start(ui_origin, network, manual_events):
+def start(ui_origin, network, manual_events, video=False):
     suffix = secrets.token_hex(8)
     container = f"scrapbook-f08-media-{suffix}"
     bucket = f"scrapbook-f08-media-{suffix}"
-    options = ("--network", network) if network else ()
+    options = ["--network", network] if network else []
+    command = [IMAGE]
+    if video:
+        fixture = Path(__file__).resolve().with_name("video_fixture_moto.py")
+        options.extend(("--mount", f"type=bind,src={fixture},dst=/moto/video_fixture_moto.py,readonly",
+            "--entrypoint", "python"))
+        command.append("/moto/video_fixture_moto.py")
     execute(
         "docker", "run", "--rm", "-d", "--name", container, "--publish", "127.0.0.1::5000",
         "--env", "MOTO_DISABLE_GLOBAL_CORS=true", "--env", "S3_IGNORE_SUBDOMAIN_BUCKETNAME=true",
-        *options, IMAGE,
+        *options, *command,
     )
     try:
         binding = execute("docker", "port", container, "5000/tcp")
@@ -103,6 +110,7 @@ def start(ui_origin, network, manual_events):
             "environment": {
                 **CREDENTIALS,
                 "PhotoSubmissions__Enabled": "true",
+                "PhotoSubmissions__VideoEnabled": str(video).lower(),
                 "PhotoSubmissions__Region": REGION,
                 "PhotoSubmissions__Bucket": bucket,
                 "PhotoSubmissions__StorageServiceUrl": api_endpoint,
@@ -118,16 +126,17 @@ def start(ui_origin, network, manual_events):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepara S3 e SQS descartáveis para as fotos da F08.")
+    parser = argparse.ArgumentParser(description="Prepara S3 e SQS descartáveis para a mídia da F08.")
     actions = parser.add_subparsers(dest="action", required=True)
     start_parser = actions.add_parser("start")
     start_parser.add_argument("--ui-origin", required=True)
     start_parser.add_argument("--network")
     start_parser.add_argument("--manual-events", action="store_true")
+    start_parser.add_argument("--video", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", args.ui_origin):
         parser.error("informe a origem HTTP exata da UI em 127.0.0.1")
-    print(json.dumps(start(args.ui_origin, args.network, args.manual_events)))
+    print(json.dumps(start(args.ui_origin, args.network, args.manual_events, args.video)))
 
 
 if __name__ == "__main__":
