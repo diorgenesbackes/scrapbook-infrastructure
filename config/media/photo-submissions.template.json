@@ -1,0 +1,318 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Recepção privada e versionada de fotos da F08",
+  "Parameters": {
+    "BucketName": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+    },
+    "NamePrefix": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{2,47}"
+    },
+    "UiOrigins": {
+      "Type": "CommaDelimitedList",
+      "AllowedPattern": "https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?"
+    },
+    "RuntimeRoleName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
+    },
+    "EnablePhotoIngestion": {
+      "Type": "String",
+      "AllowedValues": ["true", "false"],
+      "Default": "false"
+    }
+  },
+  "Conditions": {
+    "PhotoIngestionEnabled": {"Fn::Equals": [{"Ref": "EnablePhotoIngestion"}, "true"]}
+  },
+  "Resources": {
+    "MediaEncryptionKey": {
+      "Type": "AWS::KMS::Key",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "Criptografia das fotos do ambiente Scrap Book",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DelegateKeyAdministration",
+              "Effect": "Allow",
+              "Principal": {"AWS": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}},
+              "Action": [
+                "kms:DescribeKey",
+                "kms:GetKeyPolicy",
+                "kms:PutKeyPolicy",
+                "kms:EnableKey",
+                "kms:DisableKey",
+                "kms:EnableKeyRotation",
+                "kms:DisableKeyRotation",
+                "kms:GetKeyRotationStatus",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ListResourceTags",
+                "kms:UpdateKeyDescription"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DelegateMediaEncryptionThroughS3",
+              "Effect": "Allow",
+              "Principal": {"AWS": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}},
+              "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+              "Resource": "*",
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/temporary/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/original/*"}
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ReceiptDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-photo-receipts-dlq"},
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "RedriveAllowPolicy": {
+          "redrivePermission": "byQueue",
+          "sourceQueueArns": [
+            {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${NamePrefix}-photo-receipts"}
+          ]
+        }
+      }
+    },
+    "ReceiptQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-photo-receipts"},
+        "MessageRetentionPeriod": 345600,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "VisibilityTimeout": 120,
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {"Fn::GetAtt": ["ReceiptDeadLetterQueue", "Arn"]},
+          "maxReceiveCount": 5
+        }
+      }
+    },
+    "ReceiptQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [{"Ref": "ReceiptQueue"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowBucketNotification",
+              "Effect": "Allow",
+              "Principal": {"Service": "s3.amazonaws.com"},
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}"}},
+                "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
+            },
+            {
+              "Sid": "DenyOtherSourceArn",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}"}}
+              }
+            },
+            {
+              "Sid": "DenyOtherSourceAccount",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "StringNotEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
+            },
+            {
+              "Sid": "RequireTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {"Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}}
+            }
+          ]
+        }
+      }
+    },
+    "MediaBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DependsOn": "ReceiptQueuePolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": {"Ref": "BucketName"},
+        "VersioningConfiguration": {"Status": "Enabled"},
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "aws:kms",
+                "KMSMasterKeyID": {"Fn::GetAtt": ["MediaEncryptionKey", "Arn"]}
+              },
+              "BucketKeyEnabled": false
+            }
+          ]
+        },
+        "OwnershipControls": {"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]},
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedOrigins": {"Ref": "UiOrigins"},
+              "AllowedMethods": ["PUT"],
+              "AllowedHeaders": ["content-type", "x-amz-checksum-sha256", "x-amz-sdk-checksum-algorithm"],
+              "ExposedHeaders": ["x-amz-version-id"],
+              "MaxAge": 300
+            }
+          ]
+        },
+        "NotificationConfiguration": {
+          "Fn::If": [
+            "PhotoIngestionEnabled",
+            {
+              "QueueConfigurations": [
+                {
+                  "Event": "s3:ObjectCreated:Put",
+                  "Queue": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+                  "Filter": {
+                    "S3Key": {"Rules": [{"Name": "prefix", "Value": "submissions/temporary/"}]}
+                  }
+                }
+              ]
+            },
+            {"Ref": "AWS::NoValue"}
+          ]
+        }
+      }
+    },
+    "MediaBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {"Ref": "MediaBucket"},
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "RequireTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {"Fn::GetAtt": ["MediaBucket", "Arn"]},
+                {"Fn::Sub": "${MediaBucket.Arn}/*"}
+              ],
+              "Condition": {"Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}}
+            }
+          ]
+        }
+      }
+    },
+    "MediaRuntimePolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "PhotoIngestionEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-photo-submissions"},
+        "Roles": [{"Ref": "RuntimeRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "TemporaryObjectVersions",
+              "Effect": "Allow",
+              "Action": ["s3:PutObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion"],
+              "Resource": {"Fn::Sub": "${MediaBucket.Arn}/submissions/temporary/*"}
+            },
+            {
+              "Sid": "ListSubmissionVersions",
+              "Effect": "Allow",
+              "Action": "s3:ListBucketVersions",
+              "Resource": {"Fn::GetAtt": ["MediaBucket", "Arn"]},
+              "Condition": {
+                "StringLike": {"s3:prefix": ["submissions/temporary/*", "submissions/original/*"]}
+              }
+            },
+            {
+              "Sid": "ReadOriginalVersions",
+              "Effect": "Allow",
+              "Action": "s3:GetObjectVersion",
+              "Resource": {"Fn::Sub": "${MediaBucket.Arn}/submissions/original/*"}
+            },
+            {
+              "Sid": "PreserveFromTemporary",
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": {"Fn::Sub": "${MediaBucket.Arn}/submissions/original/*"},
+              "Condition": {
+                "StringLike": {
+                  "s3:x-amz-copy-source": [
+                    {"Fn::Sub": "${MediaBucket}/submissions/temporary/*"},
+                    {"Fn::Sub": "/${MediaBucket}/submissions/temporary/*"}
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "UseMediaEncryptionThroughS3",
+              "Effect": "Allow",
+              "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+              "Resource": {"Fn::GetAtt": ["MediaEncryptionKey", "Arn"]},
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "${MediaBucket.Arn}/submissions/temporary/*"},
+                    {"Fn::Sub": "${MediaBucket.Arn}/submissions/original/*"}
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "ConsumePhotoReceipts",
+              "Effect": "Allow",
+              "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage"],
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]}
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "MediaBucketName": {"Value": {"Ref": "MediaBucket"}},
+    "ReceiptQueueUrl": {"Value": {"Ref": "ReceiptQueue"}},
+    "BrowserUploadOrigin": {"Value": {"Fn::Sub": "https://${MediaBucket.RegionalDomainName}"}}
+  }
+}
