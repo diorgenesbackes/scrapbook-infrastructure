@@ -21,7 +21,7 @@ def configure(endpoint, container, visibility_timeout=30):
     name = "scrapbook-f09-" + secrets.token_hex(8)
     topic = aws(endpoint, "sns", "create-topic", "--name", name + "-events")["TopicArn"]
     dead_letter = aws(endpoint, "sqs", "create-queue", "--queue-name", name + "-dlq",
-                      "--attributes", "MessageRetentionPeriod=1209600")["QueueUrl"]
+                      "--attributes", f"MessageRetentionPeriod=1209600,VisibilityTimeout={visibility_timeout}")["QueueUrl"]
     dead_letter_arn = queue_arn(endpoint, dead_letter)
     queue = aws(endpoint, "sqs", "create-queue", "--queue-name", name + "-lock", "--attributes", json.dumps({
         "MessageRetentionPeriod": "345600",
