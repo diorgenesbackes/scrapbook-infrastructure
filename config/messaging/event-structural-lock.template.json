@@ -9,7 +9,40 @@
     "RuntimeRoleName": {
       "Type": "String",
       "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
+    },
+    "DlqInspectionRoleName": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{0,64}",
+      "Description": "Nome exato da role operacional dedicada à inspeção da DLQ nesta conta"
+    },
+    "AlarmTopicArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(arn:(aws|aws-cn|aws-us-gov):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256})?",
+      "Description": "ARN do tópico SNS Standard para alertas operacionais"
+    },
+    "ServiceLogGroupName": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "[A-Za-z0-9._/#-]{0,512}",
+      "Description": "Nome do grupo CloudWatch Logs existente com a saída JSON do serviço"
     }
+  },
+  "Rules": {
+    "RequireSeparateDlqInspectionRole": {
+      "Assertions": [
+        {
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "DlqInspectionRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "AssertDescription": "A role de inspeção da DLQ deve ser distinta da role de execução."
+        }
+      ]
+    }
+  },
+  "Conditions": {
+    "DlqInspectionEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "DlqInspectionRoleName"}, ""]}]},
+    "AlarmNotificationsEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AlarmTopicArn"}, ""]}]},
+    "TerminalFailureMonitoringEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "ServiceLogGroupName"}, ""]}]}
   },
   "Resources": {
     "EventsTopic": {
@@ -125,6 +158,96 @@
             }
           ]
         }
+      }
+    },
+    "StructuralLockDlqInspectionPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "DlqInspectionEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-structural-lock-dlq-inspection"},
+        "Roles": [{"Ref": "DlqInspectionRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["sqs:GetQueueAttributes", "sqs:ReceiveMessage"],
+              "Resource": {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "Arn"]}
+            },
+            {
+              "Effect": "Deny",
+              "NotAction": ["sqs:GetQueueAttributes", "sqs:ReceiveMessage"],
+              "Resource": {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "Arn"]}
+            }
+          ]
+        }
+      }
+    },
+    "StructuralLockDlqVisibleAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {"Fn::Sub": "${NamePrefix}-structural-lock-dlq-visible"},
+        "AlarmDescription": "A fila de falhas do travamento contém entregas visíveis para inspeção.",
+        "Namespace": "AWS/SQS",
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Dimensions": [{"Name": "QueueName", "Value": {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "QueueName"]}}],
+        "Period": 60,
+        "Statistic": "Maximum",
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": {"Fn::If": ["AlarmNotificationsEnabled", [{"Ref": "AlarmTopicArn"}], {"Ref": "AWS::NoValue"}]}
+      }
+    },
+    "StructuralLockQueueAgeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {"Fn::Sub": "${NamePrefix}-structural-lock-queue-age"},
+        "AlarmDescription": "A fila do travamento apresenta atraso sustentado no processamento.",
+        "Namespace": "AWS/SQS",
+        "MetricName": "ApproximateAgeOfOldestMessage",
+        "Dimensions": [{"Name": "QueueName", "Value": {"Fn::GetAtt": ["StructuralLockQueue", "QueueName"]}}],
+        "Period": 60,
+        "Statistic": "Maximum",
+        "EvaluationPeriods": 2,
+        "Threshold": 30,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": {"Fn::If": ["AlarmNotificationsEnabled", [{"Ref": "AlarmTopicArn"}], {"Ref": "AWS::NoValue"}]}
+      }
+    },
+    "StructuralLockTerminalFailureMetric": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Condition": "TerminalFailureMonitoringEnabled",
+      "Properties": {
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"event.structural_lock.failed\") }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "ScrapBook/StructuralLock",
+            "MetricName": {"Fn::Sub": "${NamePrefix}-terminal-failure"},
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "StructuralLockTerminalFailureAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "TerminalFailureMonitoringEnabled",
+      "Properties": {
+        "AlarmName": {"Fn::Sub": "${NamePrefix}-structural-lock-terminal-failure"},
+        "AlarmDescription": "O serviço registrou falha terminal no fluxo de travamento.",
+        "Namespace": "ScrapBook/StructuralLock",
+        "MetricName": {"Fn::Sub": "${NamePrefix}-terminal-failure"},
+        "Period": 60,
+        "Statistic": "Sum",
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": {"Fn::If": ["AlarmNotificationsEnabled", [{"Ref": "AlarmTopicArn"}], {"Ref": "AWS::NoValue"}]}
       }
     }
   },

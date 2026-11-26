@@ -10,11 +10,13 @@ from photo_media_fixture import CREDENTIALS, REGION, aws
 FIRST_CONFIRMATION = "event.first-record-confirmed.v1"
 
 
-def configure(endpoint, container):
+def configure(endpoint, container, visibility_timeout=30):
     if not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}", endpoint):
         raise ValueError("Use o endpoint HTTP loopback do Moto descartável.")
     if not re.fullmatch(r"scrapbook-f08-media-[0-9a-f]{16}", container):
         raise ValueError("Informe o contêiner descartável de mídia no Docker.")
+    if not 1 <= visibility_timeout <= 30:
+        raise ValueError("Informe a visibilidade da fila entre 1 e 30 segundos.")
 
     name = "scrapbook-f09-" + secrets.token_hex(8)
     topic = aws(endpoint, "sns", "create-topic", "--name", name + "-events")["TopicArn"]
@@ -24,7 +26,7 @@ def configure(endpoint, container):
     queue = aws(endpoint, "sqs", "create-queue", "--queue-name", name + "-lock", "--attributes", json.dumps({
         "MessageRetentionPeriod": "345600",
         "ReceiveMessageWaitTimeSeconds": "10",
-        "VisibilityTimeout": "30",
+        "VisibilityTimeout": str(visibility_timeout),
         "RedrivePolicy": json.dumps({"deadLetterTargetArn": dead_letter_arn, "maxReceiveCount": 5}),
     }))["QueueUrl"]
     arn = queue_arn(endpoint, queue)
@@ -61,8 +63,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepara o transporte descartável da F09 no Moto local.")
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--container", required=True)
+    parser.add_argument("--visibility-timeout", type=int, default=30, help="Visibilidade da fila de 1 a 30 segundos.")
     args = parser.parse_args()
     try:
-        print(json.dumps(configure(args.endpoint, args.container)))
+        print(json.dumps(configure(args.endpoint, args.container, args.visibility_timeout)))
     except ValueError as error:
         parser.error(str(error))
