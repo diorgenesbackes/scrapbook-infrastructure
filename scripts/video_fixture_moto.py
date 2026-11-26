@@ -1,8 +1,9 @@
 from base64 import b64encode
 from hashlib import sha256
+from io import BytesIO
 
 from moto.s3.exceptions import S3ClientError
-from moto.s3.models import FakeMultipart
+from moto.s3.models import FakeKey, FakeMultipart
 from moto.s3.responses import ActionResult, S3Response
 from moto.server import main
 
@@ -41,7 +42,19 @@ def serialize_list_parts(response, result, *args, **kwargs):
     return serialize(response, result, *args, **kwargs)
 
 
+def copy_version_metadata(key, memo):
+    with key.lock:
+        etag = key.etag.strip('"')
+        attributes = vars(key).copy()
+
+    snapshot = object.__new__(FakeKey)
+    vars(snapshot).update(attributes, _etag=etag, _value_buffer=BytesIO(), multipart=None, disposed=True)
+    memo[id(key)] = snapshot
+    return snapshot
+
+
 if __name__ == "__main__":
+    FakeKey.__deepcopy__ = copy_version_metadata
     FakeMultipart.set_part = store_sha256
     S3Response.upload_part = verify_sha256
     S3Response.serialized = serialize_list_parts
