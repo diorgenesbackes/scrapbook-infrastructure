@@ -34,7 +34,7 @@
       "Assertions": [
         {
           "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "DlqInspectionRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
-          "AssertDescription": "A role de inspeção da DLQ deve ser distinta da role de execução."
+          "AssertDescription": "A role de inspeção da DLQ deve ser distinta da role da tarefa."
         }
       ]
     }
@@ -155,6 +155,11 @@
               "Effect": "Allow",
               "Action": ["sqs:ReceiveMessage", "sqs:ChangeMessageVisibility", "sqs:DeleteMessage"],
               "Resource": {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]}
+            },
+            {
+              "Effect": "Deny",
+              "Action": "sqs:*",
+              "Resource": {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "Arn"]}
             }
           ]
         }

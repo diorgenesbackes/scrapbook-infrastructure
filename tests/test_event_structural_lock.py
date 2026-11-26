@@ -29,7 +29,9 @@ class EventStructuralLockTemplateTests(unittest.TestCase):
             ],
             operator_policy["Properties"]["PolicyDocument"]["Statement"],
         )
-        self.assertNotIn(queue_arn, [item["Resource"] for item in runtime_policy["PolicyDocument"]["Statement"]])
+        runtime_dlq_rules = [statement for statement in runtime_policy["PolicyDocument"]["Statement"]
+            if statement["Resource"] == queue_arn]
+        self.assertEqual([{"Effect": "Deny", "Action": "sqs:*", "Resource": queue_arn}], runtime_dlq_rules)
 
     def test_queue_alarms_monitor_native_metrics_for_the_correct_queue(self):
         for resource, metric, queue in (
