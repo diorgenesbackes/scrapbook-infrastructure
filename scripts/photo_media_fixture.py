@@ -69,7 +69,7 @@ def configure(endpoint, bucket, ui_origin, manual_events):
                          "--attribute-names", "QueueArn")["Attributes"]
         notification = {
             "QueueArn": attributes["QueueArn"],
-            "Events": ["s3:ObjectCreated:Put"],
+            "Events": ["s3:ObjectCreated:Put", "s3:ObjectCreated:CompleteMultipartUpload"],
             "Filter": {"Key": {"FilterRules": [{"Name": "prefix", "Value": TEMPORARY_PREFIX}]}},
         }
         s3("put-bucket-notification-configuration", "--notification-configuration",

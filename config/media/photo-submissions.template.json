@@ -341,6 +341,13 @@
                   "Filter": {
                     "S3Key": {"Rules": [{"Name": "prefix", "Value": "submissions/temporary/"}]}
                   }
+                },
+                {
+                  "Event": "s3:ObjectCreated:CompleteMultipartUpload",
+                  "Queue": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+                  "Filter": {
+                    "S3Key": {"Rules": [{"Name": "prefix", "Value": "submissions/temporary/"}]}
+                  }
                 }
               ]
             },
@@ -383,8 +390,17 @@
             {
               "Sid": "TemporaryObjectVersions",
               "Effect": "Allow",
-              "Action": ["s3:PutObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion"],
+              "Action": [
+                "s3:PutObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion",
+                "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"
+              ],
               "Resource": {"Fn::Sub": "${MediaBucket.Arn}/submissions/temporary/*"}
+            },
+            {
+              "Sid": "ListSubmissionMultipartUploads",
+              "Effect": "Allow",
+              "Action": "s3:ListBucketMultipartUploads",
+              "Resource": {"Fn::GetAtt": ["MediaBucket", "Arn"]}
             },
             {
               "Sid": "ListSubmissionVersions",
