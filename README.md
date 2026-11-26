@@ -60,4 +60,6 @@ python3 -B scripts/photo_media_fixture.py start --ui-origin http://127.0.0.1:517
 
 A saída JSON traz `container`, `endpoint`, `bucket`, `queueUrl` e as variáveis `environment` para o serviço de teste em Development. Informe `--network` com a rede Docker descartável se a API rodar em contêiner. Use `--video` para habilitar o vídeo e o adaptador que acrescenta os checksums SHA-256 calculados aos resultados de `ListParts` do Moto. Use `endpoint` como origem permitida de upload na UI local. Remova a instância após o teste com `docker rm -f <container>`.
 
+No Moto fixado, `ListObjectVersions` copia todas as versões antes de filtrar o prefixo e o registro interno retém essas cópias. O adaptador de `--video` fornece ao Moto cópias somente para leitura dos metadados dessa listagem, sem duplicar os bytes do objeto. A fixture mantém os originais no armazenamento versionado para leitura, verificação de checksum e `CopyObject`.
+
 Para controlar prazos no laboratório, o runner publica um envelope sintético com a chave e o `VersionId` observado após PUT ou conclusão multipart e com o instante do cenário. O Moto encaminha uma notificação automática quando o filtro coincide, mas a versão fixada da imagem omite `versionId` dessa notificação. A verificação de autorização IAM, assinatura e entrega do envelope completo depende da AWS em homologação.
