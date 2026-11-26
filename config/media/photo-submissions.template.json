@@ -18,14 +18,31 @@
       "Type": "String",
       "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
     },
+    "RedriveOperatorRoleName": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{0,64}",
+      "Description": "Nome exato da role operacional de redrive na mesma conta, com caminho IAM /"
+    },
     "EnablePhotoIngestion": {
       "Type": "String",
       "AllowedValues": ["true", "false"],
       "Default": "false"
     }
   },
+  "Rules": {
+    "RequireSeparateRedriveOperatorRole": {
+      "Assertions": [
+        {
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "RedriveOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "AssertDescription": "A role operacional de redrive deve ser distinta da role de execução."
+        }
+      ]
+    }
+  },
   "Conditions": {
-    "PhotoIngestionEnabled": {"Fn::Equals": [{"Ref": "EnablePhotoIngestion"}, "true"]}
+    "PhotoIngestionEnabled": {"Fn::Equals": [{"Ref": "EnablePhotoIngestion"}, "true"]},
+    "PhotoReceiptRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "RedriveOperatorRoleName"}, ""]}]}
   },
   "Resources": {
     "MediaEncryptionKey": {
@@ -137,7 +154,8 @@
               "Action": "sqs:SendMessage",
               "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
               "Condition": {
-                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}"}}
+                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}"}},
+                "StringNotEqualsIfExists": {"aws:CalledViaLast": "sqs.amazonaws.com"}
               }
             },
             {
@@ -147,7 +165,50 @@
               "Action": "sqs:SendMessage",
               "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
               "Condition": {
-                "StringNotEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+                "StringNotEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}},
+                "StringNotEqualsIfExists": {"aws:CalledViaLast": "sqs.amazonaws.com"}
+              }
+            },
+            {
+              "Sid": "DenyDirectSendsOutsideS3",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "StringNotEqualsIfExists": {
+                  "aws:PrincipalServiceName": "s3.amazonaws.com",
+                  "aws:CalledViaLast": "sqs.amazonaws.com"
+                }
+              }
+            },
+            {
+              "Sid": "DenySqsSendsOutsideRedriveRole",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"},
+                "ArnNotEquals": {
+                  "Fn::If": [
+                    "PhotoReceiptRedriveEnabled",
+                    {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RedriveOperatorRoleName}"}},
+                    {"Ref": "AWS::NoValue"}
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyRuntimeRoleSends",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "StringEqualsIgnoreCase": {
+                  "aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"}
+                }
               }
             },
             {
@@ -157,6 +218,76 @@
               "Action": "sqs:*",
               "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
               "Condition": {"Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}}
+            }
+          ]
+        }
+      }
+    },
+    "ReceiptRedriveOperatorPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "PhotoReceiptRedriveEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-photo-receipt-redrive"},
+        "Roles": [{"Ref": "RedriveOperatorRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyRedriveFromOtherQueues",
+              "Effect": "Deny",
+              "Action": "sqs:StartMessageMoveTask",
+              "NotResource": {"Fn::GetAtt": ["ReceiptDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RedriveOperatorRoleName}"}},
+                "StringNotEqualsIgnoreCase": {
+                  "aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"}
+                }
+              }
+            },
+            {
+              "Sid": "DenySendingToOtherQueues",
+              "Effect": "Deny",
+              "Action": "sqs:SendMessage",
+              "NotResource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RedriveOperatorRoleName}"}},
+                "StringNotEqualsIgnoreCase": {
+                  "aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"}
+                }
+              }
+            },
+            {
+              "Sid": "ManageReceiptDeadLetterRedrive",
+              "Effect": "Allow",
+              "Action": [
+                "sqs:StartMessageMoveTask",
+                "sqs:CancelMessageMoveTask",
+                "sqs:ListMessageMoveTasks",
+                "sqs:GetQueueAttributes",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage"
+              ],
+              "Resource": {"Fn::GetAtt": ["ReceiptDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RedriveOperatorRoleName}"}},
+                "StringNotEqualsIgnoreCase": {
+                  "aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"}
+                },
+                "BoolIfExists": {"aws:SecureTransport": "true"}
+              }
+            },
+            {
+              "Sid": "ReturnMessagesThroughSqs",
+              "Effect": "Allow",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["ReceiptQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RedriveOperatorRoleName}"}},
+                "StringNotEqualsIgnoreCase": {
+                  "aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"}
+                },
+                "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}
+              }
             }
           ]
         }
