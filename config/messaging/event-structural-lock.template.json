@@ -1,0 +1,136 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Distribuição do primeiro registro confirmado para o travamento da F09",
+  "Parameters": {
+    "NamePrefix": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{2,46}"
+    },
+    "RuntimeRoleName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
+    }
+  },
+  "Resources": {
+    "EventsTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {"TopicName": {"Fn::Sub": "${NamePrefix}-events"}}
+    },
+    "StructuralLockDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-structural-lock-dlq"},
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "RedriveAllowPolicy": {
+          "redrivePermission": "byQueue",
+          "sourceQueueArns": [
+            {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${NamePrefix}-structural-lock"}
+          ]
+        }
+      }
+    },
+    "StructuralLockQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-structural-lock"},
+        "MessageRetentionPeriod": 345600,
+        "ReceiveMessageWaitTimeSeconds": 10,
+        "VisibilityTimeout": 30,
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "Arn"]},
+          "maxReceiveCount": 5
+        }
+      }
+    },
+    "StructuralLockQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [{"Ref": "StructuralLockQueue"}, {"Ref": "StructuralLockDeadLetterQueue"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowEventsTopicDelivery",
+              "Effect": "Allow",
+              "Principal": {"Service": "sns.amazonaws.com"},
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": {"Ref": "EventsTopic"}},
+                "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
+            },
+            {
+              "Sid": "DenyDirectStructuralLockDelivery",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]},
+              "Condition": {"ArnNotEquals": {"aws:SourceArn": {"Ref": "EventsTopic"}}}
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": [
+                {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]},
+                {"Fn::GetAtt": ["StructuralLockDeadLetterQueue", "Arn"]}
+              ],
+              "Condition": {
+                "Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "StructuralLockSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "DependsOn": "StructuralLockQueuePolicy",
+      "Properties": {
+        "TopicArn": {"Ref": "EventsTopic"},
+        "Protocol": "sqs",
+        "Endpoint": {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]},
+        "RawMessageDelivery": true,
+        "FilterPolicyScope": "MessageAttributes",
+        "FilterPolicy": {"type": ["event.first-record-confirmed.v1"]}
+      }
+    },
+    "StructuralLockRuntimePolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-structural-lock-runtime"},
+        "Roles": [{"Ref": "RuntimeRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sns:Publish",
+              "Resource": {"Ref": "EventsTopic"}
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["sqs:ReceiveMessage", "sqs:ChangeMessageVisibility", "sqs:DeleteMessage"],
+              "Resource": {"Fn::GetAtt": ["StructuralLockQueue", "Arn"]}
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "EventsTopicArn": {"Value": {"Ref": "EventsTopic"}},
+    "StructuralLockQueueUrl": {"Value": {"Ref": "StructuralLockQueue"}},
+    "StructuralLockDeadLetterQueueUrl": {"Value": {"Ref": "StructuralLockDeadLetterQueue"}}
+  }
+}
