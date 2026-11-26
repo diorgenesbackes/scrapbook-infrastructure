@@ -78,17 +78,18 @@ def configure(endpoint, bucket, ui_origin, manual_events):
     return urlsplit(queue_url).path
 
 
-def start(ui_origin, network, manual_events, video=False):
+def start(ui_origin, network, manual_events, video=False, drop_lock_ack=False):
     suffix = secrets.token_hex(8)
     container = f"scrapbook-f08-media-{suffix}"
     bucket = f"scrapbook-f08-media-{suffix}"
     options = ["--network", network] if network else []
     command = [IMAGE]
-    if video:
-        fixture = Path(__file__).resolve().with_name("video_fixture_moto.py")
-        options.extend(("--mount", f"type=bind,src={fixture},dst=/moto/video_fixture_moto.py,readonly",
-            "--entrypoint", "python"))
-        command.append("/moto/video_fixture_moto.py")
+    if video or drop_lock_ack:
+        name = "video_fixture_moto.py" if video else "lock_ack_fixture_moto.py"
+        fixture = Path(__file__).resolve().with_name(name)
+        destination = f"/moto/{name}"
+        options.extend(("--mount", f"type=bind,src={fixture},dst={destination},readonly", "--entrypoint", "python"))
+        command.append(destination)
     execute(
         "docker", "run", "--rm", "-d", "--name", container, "--publish", "127.0.0.1::5000",
         "--env", "MOTO_DISABLE_GLOBAL_CORS=true", "--env", "S3_IGNORE_SUBDOMAIN_BUCKETNAME=true",
@@ -132,11 +133,13 @@ def main():
     start_parser.add_argument("--ui-origin", required=True)
     start_parser.add_argument("--network")
     start_parser.add_argument("--manual-events", action="store_true")
-    start_parser.add_argument("--video", action="store_true")
+    adapters = start_parser.add_mutually_exclusive_group()
+    adapters.add_argument("--video", action="store_true")
+    adapters.add_argument("--drop-lock-ack", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", args.ui_origin):
         parser.error("informe a origem HTTP exata da UI em 127.0.0.1")
-    print(json.dumps(start(args.ui_origin, args.network, args.manual_events, args.video)))
+    print(json.dumps(start(args.ui_origin, args.network, args.manual_events, args.video, args.drop_lock_ack)))
 
 
 if __name__ == "__main__":
