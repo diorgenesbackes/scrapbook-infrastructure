@@ -1,0 +1,335 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Conversão privada de mídias e entrega dos resultados do MediaConvert da F10",
+  "Parameters": {
+    "NamePrefix": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{2,40}"
+    },
+    "MediaBucketName": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+    },
+    "MediaEncryptionKeyArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:(aws|aws-cn|aws-us-gov):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+"
+    },
+    "RuntimeRoleName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
+    },
+    "ConcurrentJobs": {
+      "Type": "Number",
+      "Default": 2,
+      "MinValue": 1,
+      "MaxValue": 100
+    }
+  },
+  "Resources": {
+    "TranscodeQueue": {
+      "Type": "AWS::MediaConvert::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": {"Fn::Sub": "${NamePrefix}-transcode"},
+        "PricingPlan": "ON_DEMAND",
+        "Status": "ACTIVE",
+        "ConcurrentJobs": {"Ref": "ConcurrentJobs"}
+      }
+    },
+    "TranscodeExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"Service": "mediaconvert.amazonaws.com"},
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": {"Fn::GetAtt": ["TranscodeQueue", "Arn"]}},
+                "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "transcode-private-media",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadStagedInput",
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"}
+                },
+                {
+                  "Sid": "WriteTranscodeOutputs",
+                  "Effect": "Allow",
+                  "Action": ["s3:PutObject", "s3:AbortMultipartUpload"],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
+                },
+                {
+                  "Sid": "ReadBucketRegion",
+                  "Effect": "Allow",
+                  "Action": "s3:GetBucketLocation",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}"}
+                },
+                {
+                  "Sid": "DecryptPrivateMediaThroughS3",
+                  "Effect": "Allow",
+                  "Action": "kms:Decrypt",
+                  "Resource": {"Ref": "MediaEncryptionKeyArn"},
+                  "Condition": {
+                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                    "StringLike": {
+                      "kms:EncryptionContext:aws:s3:arn": [
+                        {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
+                        {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Sid": "EncryptPrivateOutputThroughS3",
+                  "Effect": "Allow",
+                  "Action": "kms:GenerateDataKey",
+                  "Resource": {"Ref": "MediaEncryptionKeyArn"},
+                  "Condition": {
+                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                    "StringLike": {
+                      "kms:EncryptionContext:aws:s3:arn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "TranscodeEventDeliveryDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-transcode-delivery-dlq"},
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true
+      }
+    },
+    "TranscodeResultDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-transcode-results-dlq"},
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "RedriveAllowPolicy": {
+          "redrivePermission": "byQueue",
+          "sourceQueueArns": [
+            {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${NamePrefix}-transcode-results"}
+          ]
+        }
+      }
+    },
+    "TranscodeResultQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-transcode-results"},
+        "MessageRetentionPeriod": 345600,
+        "ReceiveMessageWaitTimeSeconds": 10,
+        "VisibilityTimeout": 30,
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
+          "maxReceiveCount": 5
+        }
+      }
+    },
+    "TranscodeResultQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [
+          {"Ref": "TranscodeResultQueue"},
+          {"Ref": "TranscodeResultDeadLetterQueue"},
+          {"Ref": "TranscodeEventDeliveryDeadLetterQueue"}
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowTranscodeResultRule",
+              "Effect": "Allow",
+              "Principal": {"Service": "events.amazonaws.com"},
+              "Action": "sqs:SendMessage",
+              "Resource": [
+                {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+                {"Fn::GetAtt": ["TranscodeEventDeliveryDeadLetterQueue", "Arn"]}
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${NamePrefix}-transcode-result"}
+                }
+              }
+            },
+            {
+              "Sid": "DenyUnrelatedResultProducers",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+              "Condition": {
+                "ArnNotEquals": {
+                  "aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${NamePrefix}-transcode-result"}
+                }
+              }
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": [
+                {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+                {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
+                {"Fn::GetAtt": ["TranscodeEventDeliveryDeadLetterQueue", "Arn"]}
+              ],
+              "Condition": {
+                "Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TranscodeResultRule": {
+      "Type": "AWS::Events::Rule",
+      "DependsOn": "TranscodeResultQueuePolicy",
+      "Properties": {
+        "Name": {"Fn::Sub": "${NamePrefix}-transcode-result"},
+        "State": "ENABLED",
+        "EventPattern": {
+          "source": ["aws.mediaconvert"],
+          "detail-type": ["MediaConvert Job State Change"],
+          "account": [{"Ref": "AWS::AccountId"}],
+          "region": [{"Ref": "AWS::Region"}],
+          "detail": {
+            "queue": [{"Fn::GetAtt": ["TranscodeQueue", "Arn"]}],
+            "status": ["COMPLETE", "ERROR", "CANCELED"]
+          }
+        },
+        "Targets": [
+          {
+            "Id": "TranscodeResultQueue",
+            "Arn": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+            "DeadLetterConfig": {"Arn": {"Fn::GetAtt": ["TranscodeEventDeliveryDeadLetterQueue", "Arn"]}},
+            "RetryPolicy": {"MaximumEventAgeInSeconds": 3600, "MaximumRetryAttempts": 12}
+          }
+        ]
+      }
+    },
+    "TranscodeRuntimePolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-transcode-runtime"},
+        "Roles": [{"Ref": "RuntimeRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "SubmitAndListOnlyThisQueue",
+              "Effect": "Allow",
+              "Action": ["mediaconvert:CreateJob", "mediaconvert:ListJobs"],
+              "Resource": {"Fn::GetAtt": ["TranscodeQueue", "Arn"]}
+            },
+            {
+              "Sid": "ReadProviderJob",
+              "Effect": "Allow",
+              "Action": "mediaconvert:GetJob",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:mediaconvert:${AWS::Region}:${AWS::AccountId}:jobs/*"}
+            },
+            {
+              "Sid": "PassOnlyTranscodeExecutionRole",
+              "Effect": "Allow",
+              "Action": "iam:PassRole",
+              "Resource": {"Fn::GetAtt": ["TranscodeExecutionRole", "Arn"]},
+              "Condition": {"StringEquals": {"iam:PassedToService": "mediaconvert.amazonaws.com"}}
+            },
+            {
+              "Sid": "ConsumeTranscodeResults",
+              "Effect": "Allow",
+              "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage"],
+              "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]}
+            },
+            {
+              "Sid": "DenyRuntimeDeadLetterAccess",
+              "Effect": "Deny",
+              "Action": "sqs:*",
+              "Resource": [
+                {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
+                {"Fn::GetAtt": ["TranscodeEventDeliveryDeadLetterQueue", "Arn"]}
+              ]
+            },
+            {
+              "Sid": "WriteNewStagedInputs",
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
+              "Condition": {"StringEquals": {"s3:if-none-match": "*"}}
+            },
+            {
+              "Sid": "ReadStagingAndOutputVersions",
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+              "Resource": [
+                {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
+                {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
+              ]
+            },
+            {
+              "Sid": "DecryptPrivateMediaThroughS3",
+              "Effect": "Allow",
+              "Action": "kms:Decrypt",
+              "Resource": {"Ref": "MediaEncryptionKeyArn"},
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "EncryptStagedInputsThroughS3",
+              "Effect": "Allow",
+              "Action": "kms:GenerateDataKey",
+              "Resource": {"Ref": "MediaEncryptionKeyArn"},
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"}
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "TranscodeQueueArn": {"Value": {"Fn::GetAtt": ["TranscodeQueue", "Arn"]}},
+    "TranscodeExecutionRoleArn": {"Value": {"Fn::GetAtt": ["TranscodeExecutionRole", "Arn"]}},
+    "TranscodeResultQueueUrl": {"Value": {"Ref": "TranscodeResultQueue"}},
+    "TranscodeResultDeadLetterQueueUrl": {"Value": {"Ref": "TranscodeResultDeadLetterQueue"}},
+    "TranscodeEventDeliveryDeadLetterQueueUrl": {"Value": {"Ref": "TranscodeEventDeliveryDeadLetterQueue"}}
+  }
+}

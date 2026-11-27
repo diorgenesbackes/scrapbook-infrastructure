@@ -89,7 +89,9 @@
                   "kms:EncryptionContext:aws:s3:arn": [
                     {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/temporary/*"},
                     {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/original/*"},
-                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/derived/*"}
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/derived/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/transcode-input/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/transcode-output/*"}
                   ]
                 }
               }
