@@ -27,6 +27,10 @@ class MediaTranscodingTemplateTests(unittest.TestCase):
         trust, = self.role["AssumeRolePolicyDocument"]["Statement"]
         self.assertEqual({"Service": "mediaconvert.amazonaws.com"}, trust["Principal"])
         self.assertEqual("sts:AssumeRole", trust["Action"])
+        self.assertEqual({
+            "ArnEquals": {"aws:SourceArn": QUEUE},
+            "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}},
+        }, trust["Condition"])
         self.assertEqual("s3:GetObject", self.provider["ReadStagedInput"]["Action"])
         self.assertEqual(INPUT, self.provider["ReadStagedInput"]["Resource"])
         self.assertEqual(OUTPUT, self.provider["WriteTranscodeOutputs"]["Resource"])
@@ -51,7 +55,12 @@ class MediaTranscodingTemplateTests(unittest.TestCase):
             (self.provider, "EncryptPrivateOutputThroughS3", OUTPUT),
             (self.runtime, "EncryptStagedInputsThroughS3", INPUT),
         ):
-            self.assertEqual({"Ref": "MediaEncryptionKeyArn"}, policies[write]["Resource"])
+            for action in (write, "DecryptPrivateMediaThroughS3"):
+                self.assertEqual({"Ref": "MediaEncryptionKeyArn"}, policies[action]["Resource"])
+                self.assertEqual(
+                    {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"},
+                    policies[action]["Condition"]["StringEquals"]["kms:ViaService"],
+                )
             self.assertEqual(prefix, policies[write]["Condition"]["StringLike"][context])
             self.assertEqual(
                 [INPUT, OUTPUT], policies["DecryptPrivateMediaThroughS3"]["Condition"]["StringLike"][context]
