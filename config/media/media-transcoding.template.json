@@ -46,7 +46,11 @@
             {
               "Effect": "Allow",
               "Principal": {"Service": "mediaconvert.amazonaws.com"},
-              "Action": "sts:AssumeRole"
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": {"Fn::GetAtt": ["TranscodeQueue", "Arn"]}},
+                "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
             }
           ]
         },
@@ -80,7 +84,7 @@
                   "Action": "kms:Decrypt",
                   "Resource": {"Ref": "MediaEncryptionKeyArn"},
                   "Condition": {
-                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
+                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
                     "StringLike": {
                       "kms:EncryptionContext:aws:s3:arn": [
                         {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
@@ -95,7 +99,7 @@
                   "Action": "kms:GenerateDataKey",
                   "Resource": {"Ref": "MediaEncryptionKeyArn"},
                   "Condition": {
-                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
+                    "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
                     "StringLike": {
                       "kms:EncryptionContext:aws:s3:arn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-output/*"}
                     }
@@ -295,7 +299,7 @@
               "Action": "kms:Decrypt",
               "Resource": {"Ref": "MediaEncryptionKeyArn"},
               "Condition": {
-                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
                 "StringLike": {
                   "kms:EncryptionContext:aws:s3:arn": [
                     {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"},
@@ -310,7 +314,7 @@
               "Action": "kms:GenerateDataKey",
               "Resource": {"Ref": "MediaEncryptionKeyArn"},
               "Condition": {
-                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.amazonaws.com"}},
                 "StringLike": {
                   "kms:EncryptionContext:aws:s3:arn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/transcode-input/*"}
                 }
