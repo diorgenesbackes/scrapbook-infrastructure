@@ -88,7 +88,8 @@
                 "StringLike": {
                   "kms:EncryptionContext:aws:s3:arn": [
                     {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/temporary/*"},
-                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/original/*"}
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/original/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketName}/submissions/derived/*"}
                   ]
                 }
               }
@@ -459,6 +460,7 @@
   },
   "Outputs": {
     "MediaBucketName": {"Value": {"Ref": "MediaBucket"}},
+    "MediaEncryptionKeyArn": {"Value": {"Fn::GetAtt": ["MediaEncryptionKey", "Arn"]}},
     "ReceiptQueueUrl": {"Value": {"Ref": "ReceiptQueue"}},
     "BrowserUploadOrigin": {"Value": {"Fn::Sub": "https://${MediaBucket.RegionalDomainName}"}}
   }
