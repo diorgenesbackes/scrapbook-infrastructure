@@ -38,7 +38,7 @@ services:
       - api-keys:/app/keys
     read_only: true
     tmpfs:
-      - /tmp:size=1024m,mode=1777
+      - /tmp:size=3072m,mode=1777
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     healthcheck:
