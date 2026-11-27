@@ -98,6 +98,6 @@ Na configuração com vídeo F08 e áudio F10 simultâneos, cada réplica pode o
 
 ## Conversão privada de vídeo
 
-A F10-STORY-003 usa as mesmas filas, roles e prefixos da conversão de áudio. A ativação requer `PhotoSubmissions__VideoEnabled`, `MediaAudioProcessing__Enabled` e `MediaAudioProcessing__VideoEnabled`. A última flag começa desabilitada. Valide a matriz e os limites do MediaConvert em homologação antes de ativar. A role do MediaConvert lê somente as entradas privadas e a aplicação prepara arquivos ISO autocontidos antes de enviá-los ao provedor.
+A F10-STORY-003 usa as mesmas filas, roles e prefixos da conversão de áudio. Habilite a admissão e a conversão de áudio conforme as seções anteriores. Para vídeo, configure também `PhotoSubmissions__VideoEnabled=true` e `MediaAudioProcessing__VideoEnabled=true`. A flag de processamento de vídeo começa desabilitada. Valide a matriz e os limites do MediaConvert em homologação antes de ativar. A role do MediaConvert lê somente as entradas privadas e a aplicação prepara arquivos ISO autocontidos antes de enviá-los ao provedor.
 
 Com vídeo F10 habilitado, o orçamento por réplica soma dois estágios de até 1.012.000.000 bytes, um vídeo F08 de até 500.000.000 bytes e um áudio F08 de até 50.000.000 bytes. A verificação de uma saída ocupa uma das duas vagas do estágio. O Compose disponibiliza tmpfs gravável de 3 GiB. Garanta pelo menos 3 GiB livres no diretório temporário da tarefa publicada e confira o uso de memória e espaço com a carga representativa.
