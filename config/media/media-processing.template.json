@@ -1,0 +1,187 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Admissão de mídias confirmadas e preparação privada de fotos da F10",
+  "Parameters": {
+    "NamePrefix": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{2,46}"
+    },
+    "EventsTopicName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9_-]{1,80}",
+      "Description": "Nome do tópico SNS Standard existente nesta conta e região"
+    },
+    "MediaBucketName": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+    },
+    "MediaEncryptionKeyArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:(aws|aws-cn|aws-us-gov):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+"
+    },
+    "RuntimeRoleName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
+    }
+  },
+  "Resources": {
+    "MediaConfirmationDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-media-confirmed-dlq"},
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "RedriveAllowPolicy": {
+          "redrivePermission": "byQueue",
+          "sourceQueueArns": [
+            {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${NamePrefix}-media-confirmed"}
+          ]
+        }
+      }
+    },
+    "MediaConfirmationQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "QueueName": {"Fn::Sub": "${NamePrefix}-media-confirmed"},
+        "MessageRetentionPeriod": 345600,
+        "ReceiveMessageWaitTimeSeconds": 10,
+        "VisibilityTimeout": 30,
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
+          "maxReceiveCount": 5
+        }
+      }
+    },
+    "MediaConfirmationQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [{"Ref": "MediaConfirmationQueue"}, {"Ref": "MediaConfirmationDeadLetterQueue"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowMediaConfirmationFromEventsTopic",
+              "Effect": "Allow",
+              "Principal": {"Service": "sns.amazonaws.com"},
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}},
+                "StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}
+              }
+            },
+            {
+              "Sid": "DenyDirectMediaConfirmation",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+              "Condition": {
+                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}}
+              }
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": [
+                {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+                {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]}
+              ],
+              "Condition": {
+                "Bool": {"aws:SecureTransport": "false", "aws:PrincipalIsAWSService": "false"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "MediaConfirmationSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "DependsOn": "MediaConfirmationQueuePolicy",
+      "Properties": {
+        "TopicArn": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"},
+        "Protocol": "sqs",
+        "Endpoint": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+        "RawMessageDelivery": true,
+        "FilterPolicyScope": "MessageAttributes",
+        "FilterPolicy": {"type": ["record.media-confirmed.v1"]}
+      }
+    },
+    "MediaPreparationRuntimePolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-media-preparation-runtime"},
+        "Roles": [{"Ref": "RuntimeRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "PublishInternalFacts",
+              "Effect": "Allow",
+              "Action": "sns:Publish",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}
+            },
+            {
+              "Sid": "ConsumeMediaConfirmation",
+              "Effect": "Allow",
+              "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage"],
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]}
+            },
+            {
+              "Sid": "DisallowRuntimeDlqAccess",
+              "Effect": "Deny",
+              "Action": "sqs:*",
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]}
+            },
+            {
+              "Sid": "ReadConfirmedOriginalVersions",
+              "Effect": "Allow",
+              "Action": "s3:GetObjectVersion",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/original/*"}
+            },
+            {
+              "Sid": "WriteNewVariants",
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/derived/*"},
+              "Condition": {"StringEquals": {"s3:if-none-match": "*"}}
+            },
+            {
+              "Sid": "VerifyVariantVersions",
+              "Effect": "Allow",
+              "Action": "s3:GetObjectVersion",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/derived/*"}
+            },
+            {
+              "Sid": "UseMediaEncryptionThroughS3",
+              "Effect": "Allow",
+              "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+              "Resource": {"Ref": "MediaEncryptionKeyArn"},
+              "Condition": {
+                "StringEquals": {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
+                "StringLike": {
+                  "kms:EncryptionContext:aws:s3:arn": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/original/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/submissions/derived/*"}
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "MediaEventsTopicArn": {"Value": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}},
+    "MediaConfirmationQueueUrl": {"Value": {"Ref": "MediaConfirmationQueue"}},
+    "MediaConfirmationDeadLetterQueueUrl": {"Value": {"Ref": "MediaConfirmationDeadLetterQueue"}}
+  }
+}
