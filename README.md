@@ -101,3 +101,17 @@ Na configuração com vídeo F08 e áudio F10 simultâneos, cada réplica pode o
 A F10-STORY-003 usa as mesmas filas, roles e prefixos da conversão de áudio. Habilite a admissão e a conversão de áudio conforme as seções anteriores. Para vídeo, configure também `PhotoSubmissions__VideoEnabled=true` e `MediaAudioProcessing__VideoEnabled=true`. A flag de processamento de vídeo começa desabilitada. Valide a matriz e os limites do MediaConvert em homologação antes de ativar. A role do MediaConvert lê somente as entradas privadas e a aplicação prepara arquivos ISO autocontidos antes de enviá-los ao provedor.
 
 Com vídeo F10 habilitado, o orçamento por réplica soma dois estágios de até 1.012.000.000 bytes, um vídeo F08 de até 500.000.000 bytes e um áudio F08 de até 50.000.000 bytes. A verificação de uma saída ocupa uma das duas vagas do estágio. O Compose disponibiliza tmpfs gravável de 3 GiB. Garanta pelo menos 3 GiB livres no diretório temporário da tarefa publicada e confira o uso de memória e espaço com a carga representativa.
+
+## Operação de recuperação de mídias
+
+Aplique a geração Liquibase `f10-story-004-media-recovery` antes de executar o modo operacional e use um login exclusivo com a role `scrapbook_media_operator`. O processo `media-recover` começa desabilitado. O limite da varredura histórica é o instante UTC da primeira ativação da F10. Mantenha esse instante nas retomadas. [Procedimento e critérios](../scrapbook-docs/F10-processamento-de-midias/dev-back/f10-story-004.md)
+
+Os parâmetros de IAM opcionais ficam vazios por padrão. Informe roles preexistentes na mesma conta e com caminho IAM `/`. Separe as roles por stack e ambiente. Cada role de redrive tem um `Deny` que restringe origem e destino ao par configurado. Compartilhar uma role nas duas stacks impede o redrive em ambas.
+
+| Parâmetro | Escopo |
+| --- | --- |
+| `MediaConfirmationRedriveRoleName` no template de preparação | DLQ da confirmação para a fila de confirmação via SQS. |
+| `TranscodeResultRedriveRoleName` no template de conversão | DLQ de consumo do resultado para a fila de resultado via SQS. A DLQ de entrega do EventBridge serve para diagnosticar falhas de entrega. |
+| `MediaCleanupOperatorRoleName` no template de preparação | Listagem por prefixo e exclusão por versão no bucket da F08, sob `submissions/derived/`, `submissions/transcode-input/` e `submissions/transcode-output/`. |
+
+Em homologação, use a role de redrive correspondente e confirme que a mensagem canônica tem a proteção idempotente ativa antes de devolver a DLQ. Em seguida, confirme que `StartMessageMoveTask` preserva o `messageId` do envelope e recusa destinos diferentes da fila de origem. Confira também a recusa de `SendMessage` direto e a restrição de exclusão de versões aos prefixos previstos. Use dados sintéticos e registre o resultado. [Redrive no SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)

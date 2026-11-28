@@ -2,7 +2,7 @@
   "AWSTemplateFormatVersion": "2010-09-09",
   "Description": "Conversão privada de mídias e entrega dos resultados do MediaConvert da F10",
   "Parameters": {
-    "MediaRedriveOperatorRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
+    "TranscodeResultRedriveRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
     "NamePrefix": {
       "Type": "String",
       "AllowedPattern": "[a-z0-9][a-z0-9-]{2,40}"
@@ -30,20 +30,20 @@
     "RequireDedicatedMediaRedrive": {
       "Assertions": [
         {
-          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "TranscodeResultRedriveRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
           "AssertDescription": "O redrive exige uma role distinta do runtime."
         }
       ]
     }
   },
-  "Conditions": {"MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, ""]}]}},
+  "Conditions": {"MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "TranscodeResultRedriveRoleName"}, ""]}]}},
   "Resources": {
     "MediaRedriveOperatorPolicy": {
       "Type": "AWS::IAM::Policy",
       "Condition": "MediaRedriveEnabled",
       "Properties": {
         "PolicyName": {"Fn::Sub": "${NamePrefix}-media-transcoding-redrive"},
-        "Roles": [{"Ref": "MediaRedriveOperatorRoleName"}],
+        "Roles": [{"Ref": "TranscodeResultRedriveRoleName"}],
         "PolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -53,7 +53,7 @@
               "Action": "sqs:StartMessageMoveTask",
               "NotResource": {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TranscodeResultRedriveRoleName}"}}
               }
             },
             {
@@ -62,7 +62,7 @@
               "Action": "sqs:SendMessage",
               "NotResource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TranscodeResultRedriveRoleName}"}}
               }
             },
             {
@@ -78,7 +78,7 @@
               ],
               "Resource": {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TranscodeResultRedriveRoleName}"}}
               }
             },
             {
@@ -87,7 +87,7 @@
               "Action": "sqs:SendMessage",
               "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}},
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TranscodeResultRedriveRoleName}"}},
                 "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}
               }
             }
@@ -272,7 +272,7 @@
                   "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
                   "Condition": {
                     "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"},
-                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TranscodeResultRedriveRoleName}"}}
                   }
                 },
                 {"Ref": "AWS::NoValue"}
