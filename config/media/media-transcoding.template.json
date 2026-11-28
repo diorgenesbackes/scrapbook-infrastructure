@@ -2,6 +2,7 @@
   "AWSTemplateFormatVersion": "2010-09-09",
   "Description": "Conversão privada de mídias e entrega dos resultados do MediaConvert da F10",
   "Parameters": {
+    "MediaRedriveOperatorRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
     "NamePrefix": {
       "Type": "String",
       "AllowedPattern": "[a-z0-9][a-z0-9-]{2,40}"
@@ -25,7 +26,75 @@
       "MaxValue": 100
     }
   },
+  "Rules": {
+    "RequireDedicatedMediaRedrive": {
+      "Assertions": [
+        {
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "AssertDescription": "O redrive exige uma role distinta do runtime."
+        }
+      ]
+    }
+  },
+  "Conditions": {"MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, ""]}]}},
   "Resources": {
+    "MediaRedriveOperatorPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "MediaRedriveEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-media-transcoding-redrive"},
+        "Roles": [{"Ref": "MediaRedriveOperatorRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyOtherRedriveSources",
+              "Effect": "Deny",
+              "Action": "sqs:StartMessageMoveTask",
+              "NotResource": {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+              }
+            },
+            {
+              "Sid": "DenyOtherRedriveDestinations",
+              "Effect": "Deny",
+              "Action": "sqs:SendMessage",
+              "NotResource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+              }
+            },
+            {
+              "Sid": "ManageConsumerDeadLetterRedrive",
+              "Effect": "Allow",
+              "Action": [
+                "sqs:StartMessageMoveTask",
+                "sqs:CancelMessageMoveTask",
+                "sqs:ListMessageMoveTasks",
+                "sqs:GetQueueAttributes",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage"
+              ],
+              "Resource": {"Fn::GetAtt": ["TranscodeResultDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+              }
+            },
+            {
+              "Sid": "ReturnMessagesThroughSqs",
+              "Effect": "Allow",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}},
+                "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}
+              }
+            }
+          ]
+        }
+      }
+    },
     "TranscodeQueue": {
       "Type": "AWS::MediaConvert::Queue",
       "DeletionPolicy": "Retain",
@@ -188,8 +257,40 @@
               "Condition": {
                 "ArnNotEquals": {
                   "aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${NamePrefix}-transcode-result"}
-                }
+                },
+                "StringNotEqualsIfExists": {"aws:CalledViaLast": "sqs.amazonaws.com"}
               }
+            },
+            {
+              "Fn::If": [
+                "MediaRedriveEnabled",
+                {
+                  "Sid": "DenySqsRedriveWithoutOperator",
+                  "Effect": "Deny",
+                  "Principal": "*",
+                  "Action": "sqs:SendMessage",
+                  "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+                  "Condition": {
+                    "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"},
+                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                  }
+                },
+                {"Ref": "AWS::NoValue"}
+              ]
+            },
+            {
+              "Fn::If": [
+                "MediaRedriveEnabled",
+                {"Ref": "AWS::NoValue"},
+                {
+                  "Sid": "DenySqsRedriveWhenDisabled",
+                  "Effect": "Deny",
+                  "Principal": "*",
+                  "Action": "sqs:SendMessage",
+                  "Resource": {"Fn::GetAtt": ["TranscodeResultQueue", "Arn"]},
+                  "Condition": {"StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}}
+                }
+              ]
             },
             {
               "Sid": "DenyInsecureTransport",

@@ -23,12 +23,16 @@ class MediaProcessingTemplateTests(unittest.TestCase):
         self.assertEqual("MessageAttributes", properties["FilterPolicyScope"])
         self.assertEqual({"type": ["record.media-confirmed.v1"]}, properties["FilterPolicy"])
         policy = self.resources["MediaConfirmationQueuePolicy"]["Properties"]["PolicyDocument"]["Statement"]
-        allow, direct, transport = policy
+        allow, direct, operator, disabled, transport = policy
         self.assertEqual({"Service": "sns.amazonaws.com"}, allow["Principal"])
         self.assertEqual({"aws:SourceArn": self.topic}, allow["Condition"]["ArnEquals"])
         self.assertEqual({"aws:SourceAccount": {"Ref": "AWS::AccountId"}}, allow["Condition"]["StringEquals"])
         self.assertEqual({"aws:SourceArn": self.topic}, direct["Condition"]["ArnNotEquals"])
         self.assertEqual("Deny", direct["Effect"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, direct["Condition"]["StringNotEqualsIfExists"])
+        self.assertEqual("MediaRedriveEnabled", operator["Fn::If"][0])
+        self.assertIn("aws:PrincipalArn", operator["Fn::If"][1]["Condition"]["ArnNotEquals"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, disabled["Fn::If"][2]["Condition"]["StringEquals"])
         self.assertEqual("false", transport["Condition"]["Bool"]["aws:SecureTransport"])
 
     def test_encrypted_queues_have_one_way_redrive_and_runtime_exclusion(self):
@@ -62,6 +66,31 @@ class MediaProcessingTemplateTests(unittest.TestCase):
             {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
             kms["Condition"]["StringEquals"],
         )
+
+    def test_operational_roles_have_separate_constrained_permissions(self):
+        redrive = self.resources["MediaRedriveOperatorPolicy"]
+        self.assertEqual("MediaRedriveEnabled", redrive["Condition"])
+        self.assertEqual([{"Ref": "MediaRedriveOperatorRoleName"}], redrive["Properties"]["Roles"])
+        policy = {line["Sid"]: line for line in redrive["Properties"]["PolicyDocument"]["Statement"]}
+        self.assertEqual({"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
+            policy["DenyOtherRedriveSources"]["NotResource"])
+        self.assertEqual({"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+            policy["DenyOtherRedriveDestinations"]["NotResource"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"},
+            policy["ReturnMessagesThroughSqs"]["Condition"]["StringEquals"])
+
+        cleanup = self.resources["MediaCleanupOperatorPolicy"]
+        self.assertEqual("MediaCleanupEnabled", cleanup["Condition"])
+        self.assertEqual([{"Ref": "MediaCleanupOperatorRoleName"}], cleanup["Properties"]["Roles"])
+        policy = {line["Sid"]: line for line in cleanup["Properties"]["PolicyDocument"]["Statement"]}
+        paths = ["submissions/derived/*", "submissions/transcode-input/*", "submissions/transcode-output/*"]
+        self.assertEqual(paths, policy["ListKnownArtifactVersions"]["Condition"]["StringLike"]["s3:prefix"])
+        self.assertEqual("s3:DeleteObjectVersion", policy["DeleteOnlyArtifactVersions"]["Action"])
+        resources = [{"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/" + path} for path in paths]
+        self.assertEqual(resources, policy["DeleteOnlyArtifactVersions"]["Resource"])
+        self.assertEqual(resources, policy["DenyDeletionOutsideArtifactPaths"]["NotResource"])
+        self.assertEqual(("Deny", "s3:DeleteObject"), (policy["DenyUnversionedDeletion"]["Effect"],
+            policy["DenyUnversionedDeletion"]["Action"]))
 
     def test_photo_stack_delegates_encryption_for_derived_paths(self):
         photo = json.loads((CONFIG / "photo-submissions.template.json").read_text(encoding="utf-8"))
