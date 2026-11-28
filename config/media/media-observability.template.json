@@ -194,6 +194,74 @@
         ]
       }
     },
+    "JobsPending": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "FilterName": {"Fn::Sub": "${MonitoringName}-JobsPending"},
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"media.processing.jobs_sample\") && ($.pendingCount >= 0) }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+            "MetricName": "JobsPending",
+            "MetricValue": "$.pendingCount",
+            "Unit": "Count",
+            "Dimensions": [{"Key": "MediaType", "Value": "$.mediaType"}, {"Key": "Cohort", "Value": "$.cohort"}]
+          }
+        ]
+      }
+    },
+    "JobsActive": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "FilterName": {"Fn::Sub": "${MonitoringName}-JobsActive"},
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"media.processing.jobs_sample\") && ($.activeCount >= 0) }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+            "MetricName": "JobsActive",
+            "MetricValue": "$.activeCount",
+            "Unit": "Count",
+            "Dimensions": [{"Key": "MediaType", "Value": "$.mediaType"}, {"Key": "Cohort", "Value": "$.cohort"}]
+          }
+        ]
+      }
+    },
+    "JobsReconciling": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "FilterName": {"Fn::Sub": "${MonitoringName}-JobsReconciling"},
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"media.processing.jobs_sample\") && ($.reconcilingCount >= 0) }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+            "MetricName": "JobsReconciling",
+            "MetricValue": "$.reconcilingCount",
+            "Unit": "Count",
+            "Dimensions": [{"Key": "MediaType", "Value": "$.mediaType"}, {"Key": "Cohort", "Value": "$.cohort"}]
+          }
+        ]
+      }
+    },
+    "JobsOldestAgeSeconds": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "FilterName": {"Fn::Sub": "${MonitoringName}-JobsOldestAgeSeconds"},
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"media.processing.jobs_sample\") && ($.oldestPendingAgeSeconds >= 0) }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+            "MetricName": "JobsOldestAgeSeconds",
+            "MetricValue": "$.oldestPendingAgeSeconds",
+            "Unit": "Seconds",
+            "Dimensions": [{"Key": "MediaType", "Value": "$.mediaType"}, {"Key": "Cohort", "Value": "$.cohort"}]
+          }
+        ]
+      }
+    },
     "ConfirmationDlqVisible": {
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
