@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import unittest
 
@@ -10,6 +11,7 @@ class MediaProcessingTemplateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         template = json.loads((CONFIG / "media-processing.template.json").read_text(encoding="utf-8"))
+        cls.parameters = template["Parameters"]
         cls.resources = template["Resources"]
         cls.runtime = cls.resources["MediaPreparationRuntimePolicy"]["Properties"]["PolicyDocument"]["Statement"]
         cls.topic = template["Outputs"]["MediaEventsTopicArn"]["Value"]
@@ -83,12 +85,23 @@ class MediaProcessingTemplateTests(unittest.TestCase):
         self.assertEqual("MediaCleanupEnabled", cleanup["Condition"])
         self.assertEqual([{"Ref": "MediaCleanupOperatorRoleName"}], cleanup["Properties"]["Roles"])
         policy = {line["Sid"]: line for line in cleanup["Properties"]["PolicyDocument"]["Statement"]}
-        paths = ["submissions/derived/*", "submissions/transcode-input/*", "submissions/transcode-output/*"]
-        self.assertEqual(paths, policy["ListKnownArtifactVersions"]["Condition"]["StringLike"]["s3:prefix"])
-        self.assertEqual("s3:DeleteObjectVersion", policy["DeleteOnlyArtifactVersions"]["Action"])
-        resources = [{"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/" + path} for path in paths]
-        self.assertEqual(resources, policy["DeleteOnlyArtifactVersions"]["Resource"])
-        self.assertEqual(resources, policy["DenyDeletionOutsideArtifactPaths"]["NotResource"])
+        self.assertEqual({"Ref": "MediaCleanupArtifactKey"},
+            policy["ListKnownArtifactVersions"]["Condition"]["StringEquals"]["s3:prefix"])
+        delete = policy["DeleteOnlyArtifactVersion"]
+        resource = {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/${MediaCleanupArtifactKey}"}
+        version = {"s3:versionid": {"Ref": "MediaCleanupArtifactVersionId"}}
+        self.assertEqual(("s3:DeleteObjectVersion", resource), (delete["Action"], delete["Resource"]))
+        self.assertEqual(version, delete["Condition"]["StringEquals"])
+        self.assertEqual(resource, policy["DenyDeletionOutsideArtifactKey"]["NotResource"])
+        self.assertEqual(version, policy["DenyDeletionOutsideArtifactVersion"]["Condition"]["StringNotEquals"])
+        key_pattern = self.parameters["MediaCleanupArtifactKey"]["AllowedPattern"]
+        prefix = f"submissions/derived/12/{'a' * 32}/"
+        self.assertIsNotNone(re.fullmatch(key_pattern, prefix + "image.jpg"))
+        self.assertIsNone(re.fullmatch(key_pattern, prefix + "*"))
+        self.assertIsNone(re.fullmatch(key_pattern, "submissions/original/photo.jpg"))
+        version_pattern = self.parameters["MediaCleanupArtifactVersionId"]["AllowedPattern"]
+        self.assertIsNotNone(re.fullmatch(version_pattern, "example+/id="))
+        self.assertIsNone(re.fullmatch(version_pattern, "null"))
         self.assertEqual(("Deny", "s3:DeleteObject"), (policy["DenyUnversionedDeletion"]["Effect"],
             policy["DenyUnversionedDeletion"]["Action"]))
 
