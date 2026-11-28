@@ -117,3 +117,9 @@ Os parâmetros de IAM opcionais ficam vazios por padrão. Informe roles preexist
 O responsável pelo provisionamento confere a elegibilidade do par e configura a política da sessão de limpeza. Use um par por execução e mantenha a alteração das políticas fora da role que executa o runner. Remova a autorização do par depois de registrar o resultado.
 
 Em homologação, use a role de redrive correspondente e confirme que a mensagem canônica tem a proteção idempotente ativa antes de devolver a DLQ. Em seguida, confirme que `StartMessageMoveTask` preserva o `messageId` do envelope e recusa destinos diferentes da fila de origem. Confira também a recusa de `SendMessage` direto e a recusa de exclusão de outra chave ou versão pela role de limpeza. Use dados sintéticos e registre o resultado. [Redrive no SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)
+
+## Monitoramento da preparação de mídias
+
+O [template de observabilidade F10](config/media/media-observability.template.json) lê o grupo Standard de logs JSON existente. Informe um `MonitoringName` exclusivo por ambiente, `ServiceLogGroupName` e os nomes das três filas de falhas existentes. Confirme o nome da fila de confirmação, de resultado e de entrega EventBridge e mantenha suas políticas e retenção próprias. `AlarmTopicArn` é opcional. As métricas do template não exigem publicação direta em CloudWatch pela role do runtime.
+
+Use soma para contagens e acumulados dos intervalos de processamento e máximo para a maior latência e o estoque amostrado da Outbox. Use as métricas nativas por nome de fila para consumo, mensagens em trânsito e idade da fila. Os alarmes de DLQ observam ao menos uma mensagem visível em um minuto. Confira entrega SNS, configuração da fila, sinais ECS/RDS e coleta antes da ativação. [Procedimento de homologação](../scrapbook-docs/F10-processamento-de-midias/dev-infra/f10-story-005.md)
