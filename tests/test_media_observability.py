@@ -56,6 +56,18 @@ class MediaObservabilityTemplateTests(unittest.TestCase):
                 self.assertEqual(f"$.{field}", metric["MetricValue"])
                 self.assertNotIn("Dimensions", metric)
 
+    def test_durable_job_snapshots_are_grouped_by_media_type_and_cohort(self):
+        for name, field in (
+            ("JobsPending", "pendingCount"), ("JobsActive", "activeCount"),
+            ("JobsReconciling", "reconcilingCount"), ("JobsOldestAgeSeconds", "oldestPendingAgeSeconds"),
+        ):
+            with self.subTest(name=name):
+                props = self.resources[name]["Properties"]
+                self.assertIn('$.eventName = "media.processing.jobs_sample"', props["FilterPattern"])
+                (metric,) = props["MetricTransformations"]
+                self.assertEqual(f"$.{field}", metric["MetricValue"])
+                self.assertEqual(["$.mediaType", "$.cohort"], [item["Value"] for item in metric["Dimensions"]])
+
     def test_native_alarms_observe_existing_queue_backlogs_and_optional_notifications(self):
         expected = {
             "ConfirmationDlqVisible": "ConfirmationDlqName",
