@@ -2,7 +2,7 @@
   "AWSTemplateFormatVersion": "2010-09-09",
   "Description": "Admissão de mídias confirmadas e preparação privada de fotos da F10",
   "Parameters": {
-    "MediaRedriveOperatorRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
+    "MediaConfirmationRedriveRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
     "MediaCleanupOperatorRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
     "NamePrefix": {
       "Type": "String",
@@ -30,7 +30,7 @@
     "RequireDedicatedMediaRedrive": {
       "Assertions": [
         {
-          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaConfirmationRedriveRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
           "AssertDescription": "O redrive exige uma role distinta do runtime."
         }
       ]
@@ -42,7 +42,7 @@
           "Assert": {
             "Fn::And": [
               {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
-              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, {"Ref": "MediaRedriveOperatorRoleName"}]}]}
+              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, {"Ref": "MediaConfirmationRedriveRoleName"}]}]}
             ]
           },
           "AssertDescription": "A limpeza exige uma role distinta do runtime e do redrive."
@@ -51,7 +51,7 @@
     }
   },
   "Conditions": {
-    "MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaRedriveOperatorRoleName"}, ""]}]},
+    "MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaConfirmationRedriveRoleName"}, ""]}]},
     "MediaCleanupEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, ""]}]}
   },
   "Resources": {
@@ -60,7 +60,7 @@
       "Condition": "MediaRedriveEnabled",
       "Properties": {
         "PolicyName": {"Fn::Sub": "${NamePrefix}-media-processing-redrive"},
-        "Roles": [{"Ref": "MediaRedriveOperatorRoleName"}],
+        "Roles": [{"Ref": "MediaConfirmationRedriveRoleName"}],
         "PolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -70,7 +70,7 @@
               "Action": "sqs:StartMessageMoveTask",
               "NotResource": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
               }
             },
             {
@@ -79,7 +79,7 @@
               "Action": "sqs:SendMessage",
               "NotResource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
               }
             },
             {
@@ -95,7 +95,7 @@
               ],
               "Resource": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
               }
             },
             {
@@ -104,7 +104,7 @@
               "Action": "sqs:SendMessage",
               "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
               "Condition": {
-                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}},
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}},
                 "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}
               }
             }
@@ -242,7 +242,7 @@
                   "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
                   "Condition": {
                     "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"},
-                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaRedriveOperatorRoleName}"}}
+                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
                   }
                 },
                 {"Ref": "AWS::NoValue"}

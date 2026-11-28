@@ -116,7 +116,7 @@ class MediaTranscodingTemplateTests(unittest.TestCase):
         self.assertEqual(RESULT_DLQ, policy["ManageConsumerDeadLetterRedrive"]["Resource"])
         self.assertEqual(RESULT, policy["DenyOtherRedriveDestinations"]["NotResource"])
         self.assertEqual(RESULT, policy["ReturnMessagesThroughSqs"]["Resource"])
-        self.assertFalse(self.template["Parameters"]["MediaRedriveOperatorRoleName"]["Default"])
+        self.assertFalse(self.template["Parameters"]["TranscodeResultRedriveRoleName"]["Default"])
 
     @staticmethod
     def actions(rule):

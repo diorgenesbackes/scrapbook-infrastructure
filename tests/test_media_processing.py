@@ -70,7 +70,7 @@ class MediaProcessingTemplateTests(unittest.TestCase):
     def test_operational_roles_have_separate_constrained_permissions(self):
         redrive = self.resources["MediaRedriveOperatorPolicy"]
         self.assertEqual("MediaRedriveEnabled", redrive["Condition"])
-        self.assertEqual([{"Ref": "MediaRedriveOperatorRoleName"}], redrive["Properties"]["Roles"])
+        self.assertEqual([{"Ref": "MediaConfirmationRedriveRoleName"}], redrive["Properties"]["Roles"])
         policy = {line["Sid"]: line for line in redrive["Properties"]["PolicyDocument"]["Statement"]}
         self.assertEqual({"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
             policy["DenyOtherRedriveSources"]["NotResource"])
