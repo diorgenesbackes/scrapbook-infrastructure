@@ -90,6 +90,22 @@ class MediaObservabilityTemplateTests(unittest.TestCase):
         self.assertEqual({"AWS::CloudWatch::Alarm", "AWS::Logs::MetricFilter"},
             {item["Type"] for item in self.resources.values()})
 
+    def test_reconciliation_intervention_triggers_an_alarm_without_queue_delivery(self):
+        source = self.resources["ProcessingInterventionRequired"]["Properties"]
+        self.assertIn('$.stage = "reconciliation"', source["FilterPattern"])
+        self.assertIn('$.outcome = "intervention_required"', source["FilterPattern"])
+        self.assertIn("$.sampleCount >= 1", source["FilterPattern"])
+        (metric,) = source["MetricTransformations"]
+        alarm = self.resources["ProcessingInterventionAlarm"]["Properties"]
+        self.assertEqual(metric["MetricName"], alarm["MetricName"])
+        self.assertEqual(metric["MetricNamespace"], alarm["Namespace"])
+        self.assertNotIn("Dimensions", metric)
+        self.assertNotIn("Dimensions", alarm)
+        self.assertEqual("Sum", alarm["Statistic"])
+        self.assertEqual(1, alarm["Threshold"])
+        self.assertEqual("notBreaching", alarm["TreatMissingData"])
+        self.assertEqual(self.resources["ResultDlqVisible"]["Properties"]["AlarmActions"], alarm["AlarmActions"])
+
 
 if __name__ == "__main__":
     unittest.main()

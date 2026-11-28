@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Sinais da preparação de mídias e alarmes das DLQs existentes da F10",
+  "Description": "Sinais da preparação de mídias e alarmes de intervenção e das DLQs da F10",
   "Parameters": {
     "MonitoringName": {"Type": "String", "AllowedPattern": "[a-z0-9][a-z0-9-]{2,39}"},
     "ServiceLogGroupName": {"Type": "String", "AllowedPattern": "[A-Za-z0-9._/#-]{1,512}"},
@@ -34,6 +34,39 @@
             ]
           }
         ]
+      }
+    },
+    "ProcessingInterventionRequired": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "FilterName": {"Fn::Sub": "${MonitoringName}-ProcessingInterventionRequired"},
+        "LogGroupName": {"Ref": "ServiceLogGroupName"},
+        "FilterPattern": "{ ($.serviceName = \"scrapbook-backend\") && ($.eventName = \"media.processing.interval\") && ($.stage = \"reconciliation\") && ($.outcome = \"intervention_required\") && ($.sampleCount >= 1) }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+            "MetricName": "ProcessingInterventionRequired",
+            "MetricValue": "$.sampleCount",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "ProcessingInterventionAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {"Fn::Sub": "${MonitoringName}-processing-intervention-required"},
+        "AlarmDescription": "Uma tentativa de mídia inconclusiva atingiu o limite de reconciliação.",
+        "Namespace": {"Fn::Sub": "ScrapBook/Media/${MonitoringName}"},
+        "MetricName": "ProcessingInterventionRequired",
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": {"Fn::If": ["AlarmNotificationsEnabled", [{"Ref": "AlarmTopicArn"}], {"Ref": "AWS::NoValue"}]}
       }
     },
     "ProcessingDurationSumSeconds": {
