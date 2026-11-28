@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import unittest
 
@@ -10,6 +11,7 @@ class MediaProcessingTemplateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         template = json.loads((CONFIG / "media-processing.template.json").read_text(encoding="utf-8"))
+        cls.parameters = template["Parameters"]
         cls.resources = template["Resources"]
         cls.runtime = cls.resources["MediaPreparationRuntimePolicy"]["Properties"]["PolicyDocument"]["Statement"]
         cls.topic = template["Outputs"]["MediaEventsTopicArn"]["Value"]
@@ -23,12 +25,16 @@ class MediaProcessingTemplateTests(unittest.TestCase):
         self.assertEqual("MessageAttributes", properties["FilterPolicyScope"])
         self.assertEqual({"type": ["record.media-confirmed.v1"]}, properties["FilterPolicy"])
         policy = self.resources["MediaConfirmationQueuePolicy"]["Properties"]["PolicyDocument"]["Statement"]
-        allow, direct, transport = policy
+        allow, direct, operator, disabled, transport = policy
         self.assertEqual({"Service": "sns.amazonaws.com"}, allow["Principal"])
         self.assertEqual({"aws:SourceArn": self.topic}, allow["Condition"]["ArnEquals"])
         self.assertEqual({"aws:SourceAccount": {"Ref": "AWS::AccountId"}}, allow["Condition"]["StringEquals"])
         self.assertEqual({"aws:SourceArn": self.topic}, direct["Condition"]["ArnNotEquals"])
         self.assertEqual("Deny", direct["Effect"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, direct["Condition"]["StringNotEqualsIfExists"])
+        self.assertEqual("MediaRedriveEnabled", operator["Fn::If"][0])
+        self.assertIn("aws:PrincipalArn", operator["Fn::If"][1]["Condition"]["ArnNotEquals"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, disabled["Fn::If"][2]["Condition"]["StringEquals"])
         self.assertEqual("false", transport["Condition"]["Bool"]["aws:SecureTransport"])
 
     def test_encrypted_queues_have_one_way_redrive_and_runtime_exclusion(self):
@@ -62,6 +68,42 @@ class MediaProcessingTemplateTests(unittest.TestCase):
             {"kms:ViaService": {"Fn::Sub": "s3.${AWS::Region}.${AWS::URLSuffix}"}},
             kms["Condition"]["StringEquals"],
         )
+
+    def test_operational_roles_have_separate_constrained_permissions(self):
+        redrive = self.resources["MediaRedriveOperatorPolicy"]
+        self.assertEqual("MediaRedriveEnabled", redrive["Condition"])
+        self.assertEqual([{"Ref": "MediaConfirmationRedriveRoleName"}], redrive["Properties"]["Roles"])
+        policy = {line["Sid"]: line for line in redrive["Properties"]["PolicyDocument"]["Statement"]}
+        self.assertEqual({"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
+            policy["DenyOtherRedriveSources"]["NotResource"])
+        self.assertEqual({"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+            policy["DenyOtherRedriveDestinations"]["NotResource"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"},
+            policy["ReturnMessagesThroughSqs"]["Condition"]["StringEquals"])
+
+        cleanup = self.resources["MediaCleanupOperatorPolicy"]
+        self.assertEqual("MediaCleanupEnabled", cleanup["Condition"])
+        self.assertEqual([{"Ref": "MediaCleanupOperatorRoleName"}], cleanup["Properties"]["Roles"])
+        policy = {line["Sid"]: line for line in cleanup["Properties"]["PolicyDocument"]["Statement"]}
+        self.assertEqual({"Ref": "MediaCleanupArtifactKey"},
+            policy["ListKnownArtifactVersions"]["Condition"]["StringEquals"]["s3:prefix"])
+        delete = policy["DeleteOnlyArtifactVersion"]
+        resource = {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/${MediaCleanupArtifactKey}"}
+        version = {"s3:versionid": {"Ref": "MediaCleanupArtifactVersionId"}}
+        self.assertEqual(("s3:DeleteObjectVersion", resource), (delete["Action"], delete["Resource"]))
+        self.assertEqual(version, delete["Condition"]["StringEquals"])
+        self.assertEqual(resource, policy["DenyDeletionOutsideArtifactKey"]["NotResource"])
+        self.assertEqual(version, policy["DenyDeletionOutsideArtifactVersion"]["Condition"]["StringNotEquals"])
+        key_pattern = self.parameters["MediaCleanupArtifactKey"]["AllowedPattern"]
+        prefix = f"submissions/derived/12/{'a' * 32}/"
+        self.assertIsNotNone(re.fullmatch(key_pattern, prefix + "image.jpg"))
+        self.assertIsNone(re.fullmatch(key_pattern, prefix + "*"))
+        self.assertIsNone(re.fullmatch(key_pattern, "submissions/original/photo.jpg"))
+        version_pattern = self.parameters["MediaCleanupArtifactVersionId"]["AllowedPattern"]
+        self.assertIsNotNone(re.fullmatch(version_pattern, "example+/id="))
+        self.assertIsNone(re.fullmatch(version_pattern, "null"))
+        self.assertEqual(("Deny", "s3:DeleteObject"), (policy["DenyUnversionedDeletion"]["Effect"],
+            policy["DenyUnversionedDeletion"]["Action"]))
 
     def test_photo_stack_delegates_encryption_for_derived_paths(self):
         photo = json.loads((CONFIG / "photo-submissions.template.json").read_text(encoding="utf-8"))

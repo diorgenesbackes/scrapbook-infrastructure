@@ -97,12 +97,26 @@ class MediaTranscodingTemplateTests(unittest.TestCase):
         queue = self.resources["TranscodeResultQueue"]["Properties"]
         self.assertEqual({"deadLetterTargetArn": RESULT_DLQ, "maxReceiveCount": 5}, queue["RedrivePolicy"])
         policy = self.resources["TranscodeResultQueuePolicy"]["Properties"]["PolicyDocument"]["Statement"]
-        allow, direct, transport = policy
+        allow, direct, operator, disabled, transport = policy
         self.assertEqual({"Service": "events.amazonaws.com"}, allow["Principal"])
         self.assertEqual([RESULT, DELIVERY_DLQ], allow["Resource"])
         self.assertEqual(allow["Condition"]["ArnEquals"], direct["Condition"]["ArnNotEquals"])
         self.assertEqual("Deny", direct["Effect"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, direct["Condition"]["StringNotEqualsIfExists"])
+        self.assertEqual("MediaRedriveEnabled", operator["Fn::If"][0])
+        self.assertIn("aws:PrincipalArn", operator["Fn::If"][1]["Condition"]["ArnNotEquals"])
+        self.assertEqual({"aws:CalledViaLast": "sqs.amazonaws.com"}, disabled["Fn::If"][2]["Condition"]["StringEquals"])
         self.assertEqual([RESULT, RESULT_DLQ, DELIVERY_DLQ], transport["Resource"])
+
+    def test_native_redrive_is_limited_to_the_sqs_consumer_dlq(self):
+        resource = self.resources["MediaRedriveOperatorPolicy"]
+        self.assertEqual("MediaRedriveEnabled", resource["Condition"])
+        policy = {line["Sid"]: line for line in resource["Properties"]["PolicyDocument"]["Statement"]}
+        self.assertEqual(RESULT_DLQ, policy["DenyOtherRedriveSources"]["NotResource"])
+        self.assertEqual(RESULT_DLQ, policy["ManageConsumerDeadLetterRedrive"]["Resource"])
+        self.assertEqual(RESULT, policy["DenyOtherRedriveDestinations"]["NotResource"])
+        self.assertEqual(RESULT, policy["ReturnMessagesThroughSqs"]["Resource"])
+        self.assertFalse(self.template["Parameters"]["TranscodeResultRedriveRoleName"]["Default"])
 
     @staticmethod
     def actions(rule):
