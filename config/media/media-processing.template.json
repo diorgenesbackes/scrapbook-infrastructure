@@ -2,6 +2,18 @@
   "AWSTemplateFormatVersion": "2010-09-09",
   "Description": "Admissão de mídias confirmadas e preparação privada de fotos da F10",
   "Parameters": {
+    "MediaConfirmationRedriveRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
+    "MediaCleanupOperatorRoleName": {"Type": "String", "Default": "", "AllowedPattern": "(?:[A-Za-z0-9_+=,.@-]{1,64})?"},
+    "MediaCleanupArtifactKey": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(?:submissions/(?:(?:derived/[1-9][0-9]{0,18}/[0-9a-f]{32}/(?:image|thumbnail)\\.jpg)|(?:transcode-input/[1-9][0-9]{0,18}/[0-9a-f]{32}/input)|(?:transcode-output/[1-9][0-9]{0,18}/[0-9a-f]{32}/playback\\.(?:m4a|mp4))))?"
+    },
+    "MediaCleanupArtifactVersionId": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(?:(?!null$)[A-Za-z0-9.+_~/=%-]{1,1024})?"
+    },
     "NamePrefix": {
       "Type": "String",
       "AllowedPattern": "[a-z0-9][a-z0-9-]{2,46}"
@@ -24,7 +36,153 @@
       "AllowedPattern": "[A-Za-z0-9_+=,.@-]{1,64}"
     }
   },
+  "Rules": {
+    "RequireDedicatedMediaRedrive": {
+      "Assertions": [
+        {
+          "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaConfirmationRedriveRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+          "AssertDescription": "O redrive exige uma role distinta do runtime."
+        }
+      ]
+    },
+    "RequireDedicatedMediaCleanup": {
+      "RuleCondition": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, ""]}]},
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::And": [
+              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, {"Ref": "RuntimeRoleName"}]}]},
+              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, {"Ref": "MediaConfirmationRedriveRoleName"}]}]},
+              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupArtifactKey"}, ""]}]},
+              {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupArtifactVersionId"}, ""]}]}
+            ]
+          },
+          "AssertDescription": "A limpeza exige role própria, chave e versão verificadas."
+        }
+      ]
+    }
+  },
+  "Conditions": {
+    "MediaRedriveEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaConfirmationRedriveRoleName"}, ""]}]},
+    "MediaCleanupEnabled": {"Fn::Not": [{"Fn::Equals": [{"Ref": "MediaCleanupOperatorRoleName"}, ""]}]}
+  },
   "Resources": {
+    "MediaRedriveOperatorPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "MediaRedriveEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-media-processing-redrive"},
+        "Roles": [{"Ref": "MediaConfirmationRedriveRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyOtherRedriveSources",
+              "Effect": "Deny",
+              "Action": "sqs:StartMessageMoveTask",
+              "NotResource": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
+              }
+            },
+            {
+              "Sid": "DenyOtherRedriveDestinations",
+              "Effect": "Deny",
+              "Action": "sqs:SendMessage",
+              "NotResource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
+              }
+            },
+            {
+              "Sid": "ManageConsumerDeadLetterRedrive",
+              "Effect": "Allow",
+              "Action": [
+                "sqs:StartMessageMoveTask",
+                "sqs:CancelMessageMoveTask",
+                "sqs:ListMessageMoveTasks",
+                "sqs:GetQueueAttributes",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage"
+              ],
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationDeadLetterQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
+              }
+            },
+            {
+              "Sid": "ReturnMessagesThroughSqs",
+              "Effect": "Allow",
+              "Action": "sqs:SendMessage",
+              "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}},
+                "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "MediaCleanupOperatorPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Condition": "MediaCleanupEnabled",
+      "Properties": {
+        "PolicyName": {"Fn::Sub": "${NamePrefix}-media-cleanup"},
+        "Roles": [{"Ref": "MediaCleanupOperatorRoleName"}],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ListKnownArtifactVersions",
+              "Effect": "Allow",
+              "Action": "s3:ListBucketVersions",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}"},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaCleanupOperatorRoleName}"}},
+                "StringEquals": {"s3:prefix": {"Ref": "MediaCleanupArtifactKey"}}
+              }
+            },
+            {
+              "Sid": "DeleteOnlyArtifactVersion",
+              "Effect": "Allow",
+              "Action": "s3:DeleteObjectVersion",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/${MediaCleanupArtifactKey}"},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaCleanupOperatorRoleName}"}},
+                "StringEquals": {"s3:versionid": {"Ref": "MediaCleanupArtifactVersionId"}}
+              }
+            },
+            {
+              "Sid": "DenyUnversionedDeletion",
+              "Effect": "Deny",
+              "Action": "s3:DeleteObject",
+              "Resource": "*",
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaCleanupOperatorRoleName}"}}
+              }
+            },
+            {
+              "Sid": "DenyDeletionOutsideArtifactKey",
+              "Effect": "Deny",
+              "Action": "s3:DeleteObjectVersion",
+              "NotResource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/${MediaCleanupArtifactKey}"},
+              "Condition": {"ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaCleanupOperatorRoleName}"}}}
+            },
+            {
+              "Sid": "DenyDeletionOutsideArtifactVersion",
+              "Effect": "Deny",
+              "Action": "s3:DeleteObjectVersion",
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${MediaBucketName}/${MediaCleanupArtifactKey}"},
+              "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaCleanupOperatorRoleName}"}},
+                "StringNotEquals": {"s3:versionid": {"Ref": "MediaCleanupArtifactVersionId"}}
+              }
+            }
+          ]
+        }
+      }
+    },
     "MediaConfirmationDeadLetterQueue": {
       "Type": "AWS::SQS::Queue",
       "DeletionPolicy": "Retain",
@@ -82,8 +240,40 @@
               "Action": "sqs:SendMessage",
               "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
               "Condition": {
-                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}}
+                "ArnNotEquals": {"aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${EventsTopicName}"}},
+                "StringNotEqualsIfExists": {"aws:CalledViaLast": "sqs.amazonaws.com"}
               }
+            },
+            {
+              "Fn::If": [
+                "MediaRedriveEnabled",
+                {
+                  "Sid": "DenySqsRedriveWithoutOperator",
+                  "Effect": "Deny",
+                  "Principal": "*",
+                  "Action": "sqs:SendMessage",
+                  "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+                  "Condition": {
+                    "StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"},
+                    "ArnNotEquals": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${MediaConfirmationRedriveRoleName}"}}
+                  }
+                },
+                {"Ref": "AWS::NoValue"}
+              ]
+            },
+            {
+              "Fn::If": [
+                "MediaRedriveEnabled",
+                {"Ref": "AWS::NoValue"},
+                {
+                  "Sid": "DenySqsRedriveWhenDisabled",
+                  "Effect": "Deny",
+                  "Principal": "*",
+                  "Action": "sqs:SendMessage",
+                  "Resource": {"Fn::GetAtt": ["MediaConfirmationQueue", "Arn"]},
+                  "Condition": {"StringEquals": {"aws:CalledViaLast": "sqs.amazonaws.com"}}
+                }
+              ]
             },
             {
               "Sid": "DenyInsecureTransport",
